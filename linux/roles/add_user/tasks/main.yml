@@ -1,0 +1,10 @@
+---
+- name: update apt
+  apt: update_cache=yes
+
+- name: install sudo
+  apt: name=sudo  state=latest
+
+- name: create user
+  user: user={{ user_name }}  password={{ user_password }} groups=sudo create_home=yes shell=/bin/bash
+...

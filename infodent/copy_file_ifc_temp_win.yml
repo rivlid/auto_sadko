@@ -1,0 +1,8 @@
+---
+- hosts: "{{ hosts_group }}"
+  tasks:
+    - name: "Copy files"
+      ansible.windows.win_copy:
+        src: "/files/infoclinika_templates/"
+        dest: "{{ dest_path }}"
+...

@@ -1,0 +1,5 @@
+---
+- hosts: "{{ hosts_group }}"
+  roles:
+    - add_user
+...

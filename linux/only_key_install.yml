@@ -1,0 +1,12 @@
+---
+    - hosts: "{{ hosts_group }}"
+      become: true
+      become_method: "su"
+      become_user: "root"
+      tasks:
+        - name: "Set authorized key"
+          ansible.posix.authorized_key:
+            user: "root"
+            state: "present"
+            key: "{{ ssh_key }}"
+...

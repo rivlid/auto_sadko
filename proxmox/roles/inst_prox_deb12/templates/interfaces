@@ -1,0 +1,28 @@
+source /etc/network/interfaces.d/*
+
+auto lo
+iface lo inet loopback
+
+auto {{ ansible_default_ipv4.alias }}
+iface {{ ansible_default_ipv4.alias }} inet manual
+# dns-* options are implemented by the resolvconf package, if installed
+
+
+auto vmbr1
+iface vmbr1 inet static
+        address {{ ansible_default_ipv4.address }}/24
+        gateway {{ ansible_default_ipv4.gateway }}
+        bridge-ports {{ ansible_default_ipv4.alias }}
+        bridge-stp off
+        bridge-fd 0
+        bridge_waitport 0
+        dns-nameservers 192.168.9.4 8.8.8.8
+        dns-search sadkomed.local
+
+#auto vmbr0
+#iface vmbr0 inet manual
+#        bridge-ports eno2
+#        bridge-stp off
+#        bridge-fd 0
+#        bridge-vlan-aware yes
+#        bridge-vids 2-4094

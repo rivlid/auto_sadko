@@ -1,0 +1,11 @@
+---
+- hosts: "{{ hosts_group }}"
+  tasks:
+    - name: Restart a service
+      ansible.windows.win_service:
+        name: "{{ item }}"
+        state: restarted
+      with_items:
+      - Infoclinica ReplServer
+      - Infoclinica Analisserver ALFALAB
+...

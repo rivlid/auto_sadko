@@ -1,0 +1,25 @@
+---
+- hosts: "{{ hosts_group }}"
+  tasks:
+    - name: "Get ip gateway route 192.168.128.0/22"
+      shell: "ip route | grep 192.168.128.0/22 | cut -d' ' -f3"
+      register: video_gateway
+    - name: "Add static route in bird config"
+      lineinfile:
+        path: "/etc/bird/bird.conf"
+        insertafter: ".*статическими.*"
+        backup: true
+        line: "protocol static { import all; route 192.168.128.0/22 via {{ video_gateway.stdout }}; }"
+    - name: "Check bird config"
+      shell: "birdc configure check"
+      register: state_bird
+    - block:
+      - name: "Delete manual route"
+        shell: "ip route del 192.168.128.0/22"
+      - name: "Reconfigure bird if config OK"
+        shell: "birdc configure"
+      - name: "Print gateway"
+        ansible.builtin.debug:
+          var: video_gateway.stdout
+      when: "'Configuration OK' in state_bird.stdout"
+...

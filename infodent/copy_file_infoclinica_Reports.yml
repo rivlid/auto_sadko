@@ -1,0 +1,12 @@
+---
+- hosts: "{{ hosts_group }}"
+  tasks:
+    - name: "Copy files"
+      ansible.builtin.copy:
+        src: "/files/infoclinika_templates/"
+        dest: "/mnt/data/infodent/Reports/"
+        owner: "nobody"
+        group: "nogroup"
+        force: yes
+        mode: '0777'
+...

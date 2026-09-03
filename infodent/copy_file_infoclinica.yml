@@ -1,0 +1,12 @@
+---
+- hosts: "{{ hosts_group }}"
+  tasks:
+    - name: "Copy files"
+      ansible.builtin.copy:
+        src: "{{ src_path }}"
+        dest: "{{ dest_path }}"
+        owner: "nobody"
+        group: "nogroup"
+        force: yes
+        mode: '0777'
+...

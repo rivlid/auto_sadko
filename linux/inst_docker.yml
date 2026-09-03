@@ -1,0 +1,6 @@
+---
+- hosts: "{{ hosts_group }}"
+  roles:
+    - { role: inst_docker_deb, when: ansible_distribution == "Debian" }
+    - { role: inst_docker_ubu, when: ansible_distribution == "Ubuntu" }
+...

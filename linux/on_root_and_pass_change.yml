@@ -1,0 +1,18 @@
+---
+- hosts: "{{ hosts_group }}"
+  tasks:
+    - name: "change sshd_condfig"
+      lineinfile:
+        path: "/etc/ssh/sshd_config"
+        regexp: "(#P|P)ermitRootLogin.*"
+        line: "PermitRootLogin yes"
+        state: "present"
+    - name: "reboot sshd"
+      service:
+        name: "sshd"
+        state: "reloaded"
+    - name: "Set root password"
+      user:
+        name: "root"
+        password: "{{ root_password }}"
+...

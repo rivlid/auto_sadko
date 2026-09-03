@@ -1,0 +1,18 @@
+---
+- hosts: '{{ hosts_group }}'
+  tasks:
+    - name: Edit line PasswordAuthentication in ssh config
+      lineinfile:
+        dest: "/etc/ssh/sshd_config"
+        regexp: "#PasswordAuthentication yes"
+        line: "PasswordAuthentication no"
+    - name: Edit line PermitRootLogin in ssh config
+      lineinfile:
+        dest: "/etc/ssh/sshd_config"
+        regexp: "PermitRootLogin yes"
+        line: "PermitRootLogin without-password"
+    - name: Reboot sshd
+      service:
+        name: 'sshd.service'
+        state: 'restarted'
+...

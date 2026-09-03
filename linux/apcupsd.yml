@@ -1,0 +1,39 @@
+---
+- hosts: "{{ hosts_group }}"
+  tasks:
+    - name: "Install apcups"
+      apt:
+        name: apcupsd
+        update_cache: "yes"
+        state: "latest"
+        install_recommends: "yes"
+    - name: "Configuration /etc/default/apcupsd"
+      lineinfile:
+        path: "/etc/default/apcupsd"
+        regex: "ISCONFIGURED=.*"
+        line: "ISCONFIGURED=yes"
+    - name: "Configuration /etc/apcupsd/apcupsd.conf"
+      lineinfile:
+        path: '/etc/apcupsd/apcupsd.conf'
+        regex: '{{ item.reg }}'
+        line: '{{ item.line }}'
+      with_items:
+      - {reg: 'DEVICE /dev/ttyS0', line: '#DEVICE /dev/ttyS0'}
+      - {reg: 'NISIP .*', line: 'NISIP 0.0.0.0'}
+      - {reg: 'STATTIME .*', line: 'STATTIME 3600'}
+    - name: "Create /etc/zabbix/zabbix_agentd.conf.d/userparameter_apcupsd.conf"
+      ansible.builtin.template:
+        src: "./template/userparameter_apcupsd.conf"
+        dest: "/etc/zabbix/zabbix_agentd.conf.d/userparameter_apcupsd.conf"
+        owner: root
+        group: root
+        mode: 0644
+    - name: 'Reboot apcupsd.service'
+      service:
+        name: 'apcupsd'
+        state: 'restarted'
+    - name: 'Reboot Zabbix-agent service'
+      service:
+        name: 'zabbix-agent'
+        state: 'restarted'
+...

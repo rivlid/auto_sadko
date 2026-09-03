@@ -1,0 +1,8 @@
+---
+- hosts: "{{ hosts_group }}"
+  become: true
+  become_method: "su"
+  become_user: "root"
+  roles:
+    - add_user
+...

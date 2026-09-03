@@ -1,0 +1,29 @@
+---
+- hosts: "{{ hosts_group }}"
+  tasks:
+
+  - name: Install packages
+    apt:
+      name: "{{ item }}"
+      update_cache: "yes"
+      state: "latest"
+    with_items:
+    - mc
+    - htop
+    - atop
+    - iotop
+    - pv
+    - pbzip2
+    - liblz4-tool
+    - screen
+    - netcat
+    - iperf3
+    - tcpdump
+    - ethtool
+    - bash-completion
+    - tinc
+    - smartmontools
+    - mbuffer
+    - ncdu
+    - vim
+...

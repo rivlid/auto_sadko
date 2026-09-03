@@ -1,0 +1,45 @@
+---
+- name: 'Install ca-certificates curl'
+  ansible.builtin.apt:
+    name: '{{ item }}'
+    update_cache: 'yes'
+    state: 'latest'
+    install_recommends: true
+  with_items:
+    - ca-certificates
+    - curl
+- name: 'Create directory for APT keys'
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    mode: '755'
+- name: 'Download Docker GPG key'
+  ansible.builtin.command:
+    cmd: curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+- name: 'Set correct permissions for GPG key'
+  ansible.builtin.file:
+    path: /etc/apt/keyrings/docker.asc
+    mode: '0644'
+- name: 'Add Docker repository'
+  ansible.builtin.copy:
+    dest: /etc/apt/sources.list.d/docker.sources
+    content: |
+      Types: deb
+      URIs: https://download.docker.com/linux/ubuntu
+      Suites: {{ ansible_distribution_release }}
+      Components: stable
+      Signed-By: /etc/apt/keyrings/docker.asc
+    mode: '0644'
+- name: 'Install the Docker packages.'
+  ansible.builtin.apt:
+    name: '{{ item }}'
+    update_cache: 'yes'
+    state: 'latest'
+    install_recommends: true
+  with_items:
+    - docker-ce
+    - docker-ce-cli
+    - containerd.io
+    - docker-buildx-plugin
+    - docker-compose-plugin
+...

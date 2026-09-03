@@ -1,0 +1,8 @@
+---
+- hosts: "{{ hosts_group }}"
+  tasks:
+    - name: Restart a service
+      ansible.windows.win_service:
+        name: AlfaLAB_Mis2Lis
+        state: restarted
+...

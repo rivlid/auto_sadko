@@ -1,0 +1,21 @@
+---
+- hosts: "{{ hosts_group }}"
+  tasks:
+    - name: "Check user exists"
+      getent:
+        database: "passwd"
+        key: "{{ username }}"
+      ignore_errors: true
+      register: "user_info"
+    - name: "Create user if not exists"
+      user:
+        name: "{{ username }}"
+        password: "{{ user_password }}"
+        state: "present"
+      when: "user_info is failed"
+    - name: "Set password if user exists"
+      user:
+        name: "{{ username }}"
+        password: "{{ user_password }}"
+      when: "user_info is not failed"
+...

@@ -1,0 +1,22 @@
+---
+- hosts: "{{ hosts_group }}"
+  become: true
+  become_method: "su"
+  become_user: "root"
+  tasks:
+    - name: "change sshd_condfig"
+      lineinfile:
+        path: "/etc/ssh/sshd_config"
+        regex: "(#P|P)ermitRootLogin.*"
+        line: "PermitRootLogin yes"
+        state: "present"
+    - name: "reboot sshd"
+      service:
+        name: "sshd"
+        state: "reloaded"
+    - name: "Set authorized key"
+      ansible.posix.authorized_key:
+        user: "root"
+        state: "present"
+        key: "{{ ssh_key }}"
+...

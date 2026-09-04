@@ -1,0 +1,21 @@
+---
+- hosts: "{{ hosts_group }}"
+  tasks:
+    - name: "Copy bin"
+      ansible.builtin.copy:
+        src: "{{ src_bin }}"
+        dest: "{{ dest_bin }}"
+        owner: "nobody"
+        group: "nogroup"
+        force: yes
+        mode: '0777'
+    
+    - name: "Copy istart.ini"
+      ansible.builtin.copy:
+        src: "{{ src_ini }}"
+        dest: "{{ dest_ini }}"
+        owner: "nobody"
+        group: "nogroup"
+        force: yes
+        mode: '0777'
+...

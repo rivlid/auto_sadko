@@ -1,0 +1,8 @@
+---
+- hosts: "{{ hosts_group }}"
+  tasks:
+    - name: "Restart smbd service"
+      ansible.builtin.systemd:
+        name: smbd
+        state: restarted
+...

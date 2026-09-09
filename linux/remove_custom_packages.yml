@@ -1,0 +1,11 @@
+---
+- hosts: "{{ hosts_group }}"
+  tasks:
+
+    - name: Remove packages
+      apt:
+        name: "{{ packages }}"
+        state: absent
+        purge: true
+        autoremove: true
+...

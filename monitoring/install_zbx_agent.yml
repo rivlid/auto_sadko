@@ -1,0 +1,6 @@
+- name: install Zabbix agent2 
+  hosts: "{{ hosts_group }}"
+  become: true
+  gather_facts: true
+  roles:
+    - install_zbx_agent

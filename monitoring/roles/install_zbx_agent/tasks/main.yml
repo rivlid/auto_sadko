@@ -1,0 +1,85 @@
+---
+- name: Собрать факты об установленных пакетах
+  ansible.builtin.package_facts:
+    manager: apt
+
+- name: Установка репозитория и агента
+  when: "'zabbix-agent2' not in ansible_facts.packages"
+  block:
+    - name: Скачать пакет zabbix-release
+      ansible.builtin.get_url:
+        url: "{{ zbx_release_url }}"
+        dest: /tmp/zabbix-release.deb
+        mode: "0644"
+
+    - name: Подключить репозиторий Zabbix
+      ansible.builtin.apt:
+        deb: /tmp/zabbix-release.deb
+
+    - name: Обновить кэш apt
+      ansible.builtin.apt:
+        update_cache: true
+
+    - name: Удалить старый zabbix-agent
+      ansible.builtin.apt:
+        name: zabbix-agent
+        state: absent
+        purge: true
+
+    - name: Установить zabbix-agent2 и сопутствующие пакеты
+      ansible.builtin.apt:
+        name: zabbix-agent2
+        state: present
+
+    - name: Отключить репозиторий Zabbix
+      ansible.builtin.apt:
+        name: zabbix-release
+        state: absent
+        purge: true
+        autoremove: true
+      when: zbx_remove_repo | bool
+
+  always:
+    - name: Удалить временный .deb
+      ansible.builtin.file:
+        path: /tmp/zabbix-release.deb
+        state: absent
+
+- name: Убедиться, что подключается каталог zabbix_agent2.d
+  ansible.builtin.lineinfile:
+    path: /etc/zabbix/zabbix_agent2.conf
+    regexp: '^#?\s*Include=.*zabbix_agent2\.d/\*\.conf\s*$'
+    line: "Include=/etc/zabbix/zabbix_agent2.d/*.conf"
+    state: present
+  notify: restart zabbix-agent2
+
+- name: Разложить конфиг хоста
+  ansible.builtin.template:
+    src: agent.conf.j2
+    dest: "/etc/zabbix/zabbix_agent2.d/{{ zbx_hostname }}.conf"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: restart zabbix-agent2
+
+- name: Служба включена и запущена
+  ansible.builtin.systemd:
+    name: zabbix-agent2
+    state: started
+    enabled: true
+
+- name: Применить изменения конфига до проверки
+  ansible.builtin.meta: flush_handlers
+
+- name: Агент отвечает
+  ansible.builtin.command: zabbix_agent2 -t agent.ping
+  changed_when: false
+  when: not ansible_check_mode
+
+- name: Имя для автрегистрации корректно
+  ansible.builtin.command: zabbix_agent2 -t agent.hostname
+  register: zbx_check
+  changed_when: false
+  failed_when: zbx_hostname not in zbx_check.stdout
+  when: not ansible_check_mode
+...

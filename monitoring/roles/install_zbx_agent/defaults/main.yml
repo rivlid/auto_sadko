@@ -1,0 +1,12 @@
+---
+zbx_major: "7.0"
+zbx_release_url: "https://repo.zabbix.com/zabbix/{{ zbx_major }}/debian/pool/main/z/zabbix-release/zabbix-release_latest_{{ zbx_major }}+debian{{ ansible_distribution_major_version }}_all.deb"
+
+zbx_server: "192.168.253.41"
+zbx_server_active: "{{ zbx_server }}"
+zbx_hostname: "{{ inventory_hostname }}"
+zbx_host_metadata: "hypervison"
+
+# снимать ли репозиторий Zabbix после установки
+zbx_remove_repo: true
+...

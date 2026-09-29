@@ -73,7 +73,6 @@
         type: "{{ alias_obj.type }}"
         description: "{{ alias_obj.description }}"
         enabled: "{{ alias_obj.enabled | bool }}"
-        statistics: "{{ alias_obj.counters | bool }}"
         content: "{{ new_content }}"
         reload: true
       register: result

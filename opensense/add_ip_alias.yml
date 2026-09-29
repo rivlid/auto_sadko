@@ -1,0 +1,87 @@
+---
+# Добавление / удаление IP в алиасе OPNsense через коллекцию oxlorg.opnsense.
+#
+# Шлюзы — хосты группы opnsense в inventory (ansible_host = IP шлюза).
+# Запросы идут с Semaphore (connection: local), на шлюз по SSH не ходим.
+#
+# Переменные:
+#   target              — хост/группа из inventory, по умолчанию opnsense   (Survey)
+#   alias_name          — имя алиаса                                        (Survey)
+#   ip_address          — IP или подсеть, можно несколько через запятую     (Survey)
+#   alias_action        — add | remove, по умолчанию add                    (Survey)
+#   opn_key_<хост>      — ключ API шлюза   (Variable Group, secret; '-' в имени хоста -> '_')
+#   opn_secret_<хост>   — секрет API шлюза (Variable Group, secret)
+#   opnsense_port       — порт веб-интерфейса, по умолчанию 443             (inventory, необязательно)
+
+- name: OPNsense — IP в алиасе (oxlorg.opnsense)
+  hosts: "{{ target | default('opnsense') }}"
+  connection: local
+  gather_facts: false
+
+  vars:
+    ansible_python_interpreter: "{{ ansible_playbook_python }}"
+    host_id: "{{ inventory_hostname | replace('-', '_') }}"
+    opn_action: "{{ alias_action | default('add') }}"
+    ips: "{{ (ip_address | string).split(',') | map('trim') | reject('equalto', '') | list }}"
+    ip_regex: '^(\d{1,3}\.){3}\d{1,3}(/\d{1,2})?$'
+
+  module_defaults:
+    group/oxlorg.opnsense.all:
+      firewall: "{{ ansible_host }}"
+      api_port: "{{ opnsense_port | default(443) }}"
+      api_key: "{{ vars['opn_key_' + host_id] }}"
+      api_secret: "{{ vars['opn_secret_' + host_id] }}"
+      ssl_verify: false
+
+  tasks:
+    - name: Проверка входных данных
+      ansible.builtin.assert:
+        that:
+          - alias_name is defined and alias_name | length > 0
+          - ips | length > 0
+          - ips | reject('match', ip_regex) | list | length == 0
+          - opn_action in ['add', 'remove']
+        fail_msg: "Проверьте alias_name, ip_address ({{ ips }}) и alias_action (add/remove)"
+        quiet: true
+
+    - name: Прочитать алиасы
+      oxlorg.opnsense.list:
+        target: alias
+      register: aliases
+
+    - name: Найти нужный алиас
+      ansible.builtin.set_fact:
+        alias_obj: "{{ aliases.data | selectattr('name', 'equalto', alias_name) | list | first | default({}) }}"
+
+    - name: Алиас должен существовать и быть типа host/network
+      ansible.builtin.assert:
+        that:
+          - alias_obj | length > 0
+          - alias_obj.type in ['host', 'network']
+        fail_msg: "Алиас '{{ alias_name }}' не найден или его тип '{{ alias_obj.type | default('?') }}' не подходит"
+        quiet: true
+
+    - name: Вычислить новое содержимое
+      ansible.builtin.set_fact:
+        new_content: "{{ (alias_obj.content | union(ips)) if opn_action == 'add' else (alias_obj.content | difference(ips)) }}"
+
+    # Модуль заменяет алиас целиком: тип, описание, включённость и статистику
+    # передаём текущие, иначе они сбросятся к значениям по умолчанию.
+    - name: Записать алиас и применить
+      oxlorg.opnsense.alias:
+        name: "{{ alias_name }}"
+        type: "{{ alias_obj.type }}"
+        description: "{{ alias_obj.description }}"
+        enabled: "{{ alias_obj.enabled | bool }}"
+        statistics: "{{ alias_obj.counters | bool }}"
+        content: "{{ new_content }}"
+        reload: true
+      register: result
+
+    - name: Итог
+      ansible.builtin.debug:
+        msg:
+          - "Алиас: {{ alias_name }} ({{ alias_obj.type }})"
+          - "Действие: {{ opn_action }} {{ ips | join(', ') }}"
+          - "{{ 'Изменено' if result is changed else 'Без изменений (уже было так)' }}"
+          - "Сейчас в алиасе: {{ new_content | join(', ') }}"

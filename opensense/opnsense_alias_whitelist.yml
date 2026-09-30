@@ -6,7 +6,7 @@
 # Переменные:
 #   target              — группа шлюзов: filial | kzk | store | all (все)           (Survey, обязательно)
 #   alias_name          — имя алиаса, например white_site                          (Survey)
-#   entries             — IP, подсети, DNS-имена через запятую или пробел          (Survey)
+#   entries             — IP, подсети, DNS-имена через запятую или пробел (Survey; можно назвать ip_address)
 #   alias_action        — add | remove, по умолчанию add                           (Survey)
 #   opn_key_<хост>      — ключ API шлюза   (Variable Group → Secrets → Extra variables)
 #   opn_secret_<хост>   — секрет API шлюза (Variable Group → Secrets → Extra variables)
@@ -26,7 +26,7 @@
     host_id: "{{ inventory_hostname | replace('-', '_') }}"
     opn_action: "{{ alias_action | default('add') }}"
     # разделители: запятая, пробел, точка с запятой, перевод строки; всё в нижний регистр
-    items: "{{ (entries | string | lower) | regex_replace('[,;\\s]+', ' ') | trim | split(' ') | reject('equalto', '') | unique | list }}"
+    items: "{{ (entries | default(ip_address | default('')) | string | lower) | regex_replace('[,;\\s]+', ' ') | trim | split(' ') | reject('equalto', '') | unique | list }}"
     ip_regex: '^(25[0-5]|2[0-4]\d|1?\d?\d)(\.(25[0-5]|2[0-4]\d|1?\d?\d)){3}$'
     cidr_regex: '^(25[0-5]|2[0-4]\d|1?\d?\d)(\.(25[0-5]|2[0-4]\d|1?\d?\d)){3}/([0-9]|[12]\d|3[0-2])$'
     fqdn_regex: '^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$'

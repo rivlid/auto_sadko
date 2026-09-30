@@ -11,6 +11,7 @@
 #   opn_key_<хост>      — ключ API шлюза   (Variable Group → Secrets → Extra variables)
 #   opn_secret_<хост>   — секрет API шлюза (Variable Group → Secrets → Extra variables)
 #   opnsense_port       — порт веб-интерфейса, по умолчанию 443                    (inventory, необязательно)
+#   show_content        — true: напечатать полный список алиаса, по умолчанию false (Survey, необязательно)
 #
 # Правила для типов алиаса:
 #   host    — IP и DNS-имена (подсети OPNsense в host-алиас не пускает)
@@ -117,6 +118,13 @@
       ansible.builtin.debug:
         msg:
           - "{{ inventory_hostname }}: алиас {{ alias_name }} ({{ alias_obj.type }})"
-          - "Действие: {{ opn_action }} {{ items | join(', ') }}"
-          - "{{ 'Изменено' if result is changed else 'Без изменений (уже было так)' }}"
-          - "Записей в алиасе: {{ new_content | length }}"
+          - "Запрошено: {{ opn_action }} {{ items | join(', ') }}"
+          - "Добавлено: {{ new_content | difference(alias_obj.content) | join(', ') | default('—', true) }}"
+          - "Удалено: {{ alias_obj.content | difference(new_content) | join(', ') | default('—', true) }}"
+          - "Записей в алиасе: было {{ alias_obj.content | length }}, стало {{ new_content | length }}"
+
+    # Полный список — только по запросу (show_content: true), иначе на 17 шлюзах лог станет огромным
+    - name: Полное содержимое алиаса
+      ansible.builtin.debug:
+        msg: "{{ new_content }}"
+      when: show_content | default(false) | bool

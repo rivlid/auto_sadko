@@ -1,0 +1,215 @@
+---
+# Сводный отчёт по шлюзам OPNsense (только чтение, ничего не меняет).
+#
+# По каждому шлюзу: версия, наличие обновлений, аптайм, нагрузка, память, диск,
+# дата последнего изменения конфигурации, интерфейсы (адрес, статус, ошибки).
+# По группе: сверка алиасов между шлюзами — где алиаса нет и каких записей не хватает.
+#
+# Переменные:
+#   target              — группа/хост из inventory: filial | kzk | store | all     (Survey, обязательно)
+#   opn_key_<хост>      — ключ API шлюза   (Variable Group → Secrets → Extra variables)
+#   opn_secret_<хост>   — секрет API шлюза (Variable Group → Secrets → Extra variables)
+#   opnsense_port       — порт веб-интерфейса, по умолчанию 443                    (inventory, необязательно)
+#   compare_aliases     — список алиасов для сверки через запятую; пусто — все     (Survey, необязательно)
+#
+# Права API-пользователя на шлюзе (в дополнение к правам на алиасы):
+#   "Lobby: Dashboard"   — api/diagnostics/system/*
+#   "Status: Interfaces" — api/interfaces/overview/*
+
+- name: Сбор данных с OPNsense
+  hosts: "{{ target }}"
+  connection: local
+  gather_facts: false
+
+  vars:
+    ansible_python_interpreter: "{{ ansible_playbook_python }}"
+    host_id: "{{ inventory_hostname | replace('-', '_') }}"
+    opn_base: "https://{{ ansible_host }}:{{ opnsense_port | default(443) }}/api"
+    builtin_aliases: ['bogons', 'bogonsv6', 'sshlockout', 'virusprot']
+
+  module_defaults:
+    ansible.builtin.uri:
+      method: GET
+      user: "{{ vars['opn_key_' + host_id] }}"
+      password: "{{ vars['opn_secret_' + host_id] }}"
+      force_basic_auth: true
+      validate_certs: false
+      return_content: true
+      timeout: 20
+    group/oxlorg.opnsense.all:
+      firewall: "{{ ansible_host }}"
+      api_port: "{{ opnsense_port | default(443) }}"
+      api_key: "{{ vars['opn_key_' + host_id] }}"
+      api_secret: "{{ vars['opn_secret_' + host_id] }}"
+      ssl_verify: false
+
+  tasks:
+    - name: Опрос шлюза
+      block:
+        - name: Версия и обновления
+          ansible.builtin.uri:
+            url: "{{ opn_base }}/diagnostics/system/system_information"
+          register: r_info
+
+        - name: Аптайм, нагрузка, изменение конфигурации
+          ansible.builtin.uri:
+            url: "{{ opn_base }}/diagnostics/system/system_time"
+          register: r_time
+
+        - name: Память
+          ansible.builtin.uri:
+            url: "{{ opn_base }}/diagnostics/system/system_resources"
+          register: r_mem
+
+        - name: Диск
+          ansible.builtin.uri:
+            url: "{{ opn_base }}/diagnostics/system/system_disk"
+          register: r_disk
+
+        - name: Интерфейсы (с детальной статистикой)
+          ansible.builtin.uri:
+            url: "{{ opn_base }}/interfaces/overview/interfaces_info/1"
+          register: r_if
+
+        - name: Алиасы
+          oxlorg.opnsense.list:
+            target: alias
+          register: r_alias
+
+        - name: Собрать данные шлюза
+          ansible.builtin.set_fact:
+            gw:
+              ok: true
+              name: "{{ r_info.json.name | default('') }}"
+              version: "{{ (r_info.json.versions | default(['?']))[0] }}"
+              updates: "{{ 'pending' in (r_info.json.updates | default('')) }}"
+              uptime: "{{ r_time.json.uptime | default('?') }}"
+              load: "{{ r_time.json.loadavg | default('?') }}"
+              config_changed: "{{ r_time.json.config | default('?') }}"
+              mem_used_mb: "{{ r_mem.json.memory.used_frmt | default('?') }}"
+              mem_total_mb: "{{ r_mem.json.memory.total_frmt | default('?') }}"
+              mem_pct: >-
+                {{ ((r_mem.json.memory.used | float) / (r_mem.json.memory.total | float) * 100) | round(0) | int
+                   if (r_mem.json.memory.total | default(0) | float) > 0 else '?' }}
+              disk_root: >-
+                {{ (r_disk.json.devices | default([]) | selectattr('mountpoint', 'equalto', '/') | list
+                    + [{'used_pct': '?', 'used': '?', 'total': '?'}]) | first }}
+              interfaces: >-
+                {%- set out = [] -%}
+                {%- for i in r_if.json.rows | default([]) if i.identifier | default('') != '' -%}
+                {%-   set st = i.statistics | default({}) -%}
+                {%-   set _ = out.append({
+                        'name': i.description | default(i.identifier),
+                        'device': i.device | default('?'),
+                        'status': i.status | default('?'),
+                        'enabled': i.enabled | default(false),
+                        'addr': i.addr4 | default('', true) or ((i.ipv4 | default([]) | map(attribute='ipaddr') | list) + ['—']) | first,
+                        'media': i.media | default(''),
+                        'in_err': st['input errors'] | default(0) | int,
+                        'out_err': st['output errors'] | default(0) | int,
+                        'coll': st['collisions'] | default(0) | int
+                      }) -%}
+                {%- endfor -%}
+                {{- out -}}
+              aliases: >-
+                {%- set out = {} -%}
+                {%- for a in r_alias.data | default([])
+                      if not a.name.startswith('__') and a.name not in builtin_aliases -%}
+                {%-   set _ = out.update({a.name: {'type': a.type, 'content': a.content | map('lower') | sort | list}}) -%}
+                {%- endfor -%}
+                {{- out -}}
+
+      rescue:
+        - name: Шлюз не ответил — фиксируем ошибку, отчёт продолжается
+          ansible.builtin.set_fact:
+            gw:
+              ok: false
+              error: "{{ ansible_failed_result.msg | default('ошибка') | truncate(200) }}"
+
+- name: Сводный отчёт
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    ansible_python_interpreter: "{{ ansible_playbook_python }}"
+    gws: "{{ groups[target] if target in groups else (target.split(',') | map('trim') | list) }}"
+    alias_filter: "{{ (compare_aliases | default('') | string).split(',') | map('trim') | reject('equalto', '') | list }}"
+
+  tasks:
+    - name: Состояние шлюзов
+      ansible.builtin.debug:
+        msg: >-
+          {%- set out = [] -%}
+          {%- for h in gws -%}
+          {%-   set g = hostvars[h].gw | default({'ok': false, 'error': 'нет данных'}) -%}
+          {%-   if g.ok -%}
+          {%-     set _ = out.append(
+                    h ~ ' | ' ~ g.version ~ (' | ЕСТЬ ОБНОВЛЕНИЯ' if g.updates else '') ~
+                    ' | up ' ~ g.uptime ~ ' | load ' ~ g.load ~
+                    ' | RAM ' ~ g.mem_pct ~ '% (' ~ g.mem_used_mb ~ '/' ~ g.mem_total_mb ~ ' MB)' ~
+                    ' | disk / ' ~ g.disk_root.used_pct ~ '% (' ~ g.disk_root.used ~ '/' ~ g.disk_root.total ~ ')' ~
+                    ' | конфиг изменён ' ~ g.config_changed) -%}
+          {%-   else -%}
+          {%-     set _ = out.append(h ~ ' | НЕДОСТУПЕН: ' ~ g.error) -%}
+          {%-   endif -%}
+          {%- endfor -%}
+          {{- out -}}
+
+    - name: Интерфейсы
+      ansible.builtin.debug:
+        msg: >-
+          {%- set out = [] -%}
+          {%- for h in gws if hostvars[h].gw.ok | default(false) -%}
+          {%-   for i in hostvars[h].gw.interfaces -%}
+          {%-     set flag = '' -%}
+          {%-     if i.enabled and i.status != 'up' %}{% set flag = '  <-- НЕ UP' %}{% endif -%}
+          {%-     if i.in_err + i.out_err + i.coll > 0 %}{% set flag = flag ~ '  <-- ОШИБКИ' %}{% endif -%}
+          {%-     set _ = out.append(
+                    h ~ ' | ' ~ i.name ~ ' (' ~ i.device ~ ') | ' ~ i.status ~ ' | ' ~ i.addr ~
+                    (' | ' ~ i.media if i.media else '') ~
+                    ' | err in/out/coll ' ~ i.in_err ~ '/' ~ i.out_err ~ '/' ~ i.coll ~ flag) -%}
+          {%-   endfor -%}
+          {%- endfor -%}
+          {{- out -}}
+
+    - name: Сверка алиасов между шлюзами
+      ansible.builtin.debug:
+        msg: >-
+          {%- set ok_hosts = [] -%}
+          {%- for h in gws if hostvars[h].gw.ok | default(false) %}{% set _ = ok_hosts.append(h) %}{% endfor -%}
+          {%- set names = [] -%}
+          {%- for h in ok_hosts %}{% for n in hostvars[h].gw.aliases %}{% set _ = names.append(n) %}{% endfor %}{% endfor -%}
+          {%- set names = names | unique | sort -%}
+          {%- if alias_filter | length > 0 %}{% set names = names | select('in', alias_filter) | list %}{% endif -%}
+          {%- set out = [] -%}
+          {%- set same = [] -%}
+          {%- for n in names -%}
+          {%-   set have = [] -%}
+          {%-   set allc = [] -%}
+          {%-   for h in ok_hosts if n in hostvars[h].gw.aliases -%}
+          {%-     set _ = have.append(h) -%}
+          {%-     for c in hostvars[h].gw.aliases[n].content %}{% set _ = allc.append(c) %}{% endfor -%}
+          {%-   endfor -%}
+          {%-   set allc = allc | unique | list -%}
+          {%-   set lines = [] -%}
+          {%-   set absent = ok_hosts | difference(have) -%}
+          {%-   if absent | length > 0 -%}
+          {%-     set _ = lines.append('  нет алиаса на: ' ~ absent | join(', ')) -%}
+          {%-   endif -%}
+          {%-   for h in have -%}
+          {%-     set miss = allc | difference(hostvars[h].gw.aliases[n].content) -%}
+          {%-     if miss | length > 0 -%}
+          {%-       set _ = lines.append('  ' ~ h ~ ': не хватает ' ~ miss | length ~ ' — ' ~ (miss[:15] | join(', ')) ~ (' …' if miss | length > 15 else '')) -%}
+          {%-     endif -%}
+          {%-   endfor -%}
+          {%-   if lines | length > 0 -%}
+          {%-     set _ = out.append(n ~ ' — РАЗЛИЧАЕТСЯ (есть на ' ~ have | length ~ ' из ' ~ ok_hosts | length ~ ', всего записей ' ~ allc | length ~ ')') -%}
+          {%-     for l in lines %}{% set _ = out.append(l) %}{% endfor -%}
+          {%-   else -%}
+          {%-     set _ = same.append(n) -%}
+          {%-   endif -%}
+          {%- endfor -%}
+          {%- if same | length > 0 %}{% set _ = out.append('Одинаковы на всех шлюзах: ' ~ same | join(', ')) %}{% endif -%}
+          {%- if ok_hosts | length < 2 %}{% set _ = out.append('Для сверки нужно минимум 2 доступных шлюза') %}{% endif -%}
+          {{- out -}}

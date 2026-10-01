@@ -30,8 +30,8 @@
   module_defaults:
     ansible.builtin.uri:
       method: GET
-      user: "{{ vars['opn_key_' + host_id] }}"
-      password: "{{ vars['opn_secret_' + host_id] }}"
+      user: "{{ vars['opn_key_' + host_id] | default('') }}"
+      password: "{{ vars['opn_secret_' + host_id] | default('') }}"
       force_basic_auth: true
       validate_certs: false
       return_content: true
@@ -39,13 +39,21 @@
     group/oxlorg.opnsense.all:
       firewall: "{{ ansible_host }}"
       api_port: "{{ opnsense_port | default(443) }}"
-      api_key: "{{ vars['opn_key_' + host_id] }}"
-      api_secret: "{{ vars['opn_secret_' + host_id] }}"
+      api_key: "{{ vars['opn_key_' + host_id] | default('') }}"
+      api_secret: "{{ vars['opn_secret_' + host_id] | default('') }}"
       ssl_verify: false
 
   tasks:
     - name: Опрос шлюза
       block:
+        - name: Ключи API для шлюза заданы
+          ansible.builtin.assert:
+            that:
+              - ('opn_key_' + host_id) in vars
+              - ('opn_secret_' + host_id) in vars
+            fail_msg: "Нет ключей opn_key_{{ host_id }} / opn_secret_{{ host_id }} в Variable Group (Secrets → Extra variables)"
+            quiet: true
+
         - name: Версия и обновления
           ansible.builtin.uri:
             url: "{{ opn_base }}/diagnostics/system/system_information"
@@ -92,8 +100,10 @@
                 {{ ((r_mem.json.memory.used | float) / (r_mem.json.memory.total | float) * 100) | round(0) | int
                    if (r_mem.json.memory.total | default(0) | float) > 0 else '?' }}
               disk_root: >-
-                {{ (r_disk.json.devices | default([]) | selectattr('mountpoint', 'equalto', '/') | list
-                    + [{'used_pct': '?', 'used': '?', 'total': '?'}]) | first }}
+                {%- set d = (r_disk.json.devices | default([]) | selectattr('mountpoint', 'equalto', '/') | list + [{}]) | first -%}
+                {{- {'used_pct': d.used_pct | default('?'),
+                     'used': d.used | default('?'),
+                     'total': d.total | default(d.blocks | default('?'))} -}}
               interfaces: >-
                 {%- set out = [] -%}
                 {%- for i in r_if.json.rows | default([]) if i.identifier | default('') != '' -%}
@@ -148,7 +158,7 @@
                     h ~ ' | ' ~ g.version ~ (' | ЕСТЬ ОБНОВЛЕНИЯ' if g.updates else '') ~
                     ' | up ' ~ g.uptime ~ ' | load ' ~ g.load ~
                     ' | RAM ' ~ g.mem_pct ~ '% (' ~ g.mem_used_mb ~ '/' ~ g.mem_total_mb ~ ' MB)' ~
-                    ' | disk / ' ~ g.disk_root.used_pct ~ '% (' ~ g.disk_root.used ~ '/' ~ g.disk_root.total ~ ')' ~
+                    ' | disk / ' ~ g.disk_root.used_pct | default('?') ~ '% (' ~ g.disk_root.used | default('?') ~ '/' ~ g.disk_root.total | default('?') ~ ')' ~
                     ' | конфиг изменён ' ~ g.config_changed) -%}
           {%-   else -%}
           {%-     set _ = out.append(h ~ ' | НЕДОСТУПЕН: ' ~ g.error) -%}

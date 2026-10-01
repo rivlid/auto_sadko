@@ -10,7 +10,8 @@
 #   opn_key_<хост>      — ключ API шлюза   (Variable Group → Secrets → Extra variables)
 #   opn_secret_<хост>   — секрет API шлюза (Variable Group → Secrets → Extra variables)
 #   opnsense_port       — порт веб-интерфейса, по умолчанию 443                    (inventory, необязательно)
-#   compare_aliases     — список алиасов для сверки через запятую; пусто — все     (Survey, необязательно)
+#   compare_aliases     — алиасы для сверки через запятую; пусто — стандартный список ниже (Survey, необязательно)
+#                         'all' — сверить все алиасы
 #
 # Права API-пользователя на шлюзе (в дополнение к правам на алиасы):
 #   "Lobby: Dashboard"   — api/diagnostics/system/*
@@ -144,7 +145,11 @@
   vars:
     ansible_python_interpreter: "{{ ansible_playbook_python }}"
     gws: "{{ groups[target] if target in groups else (target.split(',') | map('trim') | list) }}"
-    alias_filter: "{{ (compare_aliases | default('') | string).split(',') | map('trim') | reject('equalto', '') | list }}"
+    # Алиасы, которые должны быть одинаковыми на всех шлюзах
+    default_compare: [black_list, external_sadko, lsrv, lsys, only_inet, sadko_network,
+                      sadko_services, white_list_host, white_wan_networks]
+    alias_input: "{{ (compare_aliases | default('') | string).split(',') | map('trim') | reject('equalto', '') | list }}"
+    alias_filter: "{{ [] if alias_input == ['all'] else (alias_input if alias_input | length > 0 else default_compare) }}"
 
   tasks:
     - name: Состояние шлюзов
@@ -183,6 +188,8 @@
           {%- endfor -%}
           {{- out -}}
 
+    # Эталон для каждого алиаса — записи, которые есть больше чем на половине шлюзов с этим алиасом.
+    # Показываем, каких общих записей не хватает на шлюзе, и сколько у него своих (локальных) записей.
     - name: Сверка алиасов между шлюзами
       ansible.builtin.debug:
         msg: >-
@@ -190,36 +197,40 @@
           {%- for h in gws if hostvars[h].gw.ok | default(false) %}{% set _ = ok_hosts.append(h) %}{% endfor -%}
           {%- set names = [] -%}
           {%- for h in ok_hosts %}{% for n in hostvars[h].gw.aliases %}{% set _ = names.append(n) %}{% endfor %}{% endfor -%}
-          {%- set names = names | unique | sort -%}
-          {%- if alias_filter | length > 0 %}{% set names = names | select('in', alias_filter) | list %}{% endif -%}
+          {%- set names = alias_filter if alias_filter | length > 0 else (names | unique | sort) -%}
           {%- set out = [] -%}
           {%- set same = [] -%}
           {%- for n in names -%}
           {%-   set have = [] -%}
-          {%-   set allc = [] -%}
+          {%-   set cnt = {} -%}
           {%-   for h in ok_hosts if n in hostvars[h].gw.aliases -%}
           {%-     set _ = have.append(h) -%}
-          {%-     for c in hostvars[h].gw.aliases[n].content %}{% set _ = allc.append(c) %}{% endfor -%}
+          {%-     for c in hostvars[h].gw.aliases[n].content | unique %}{% set _ = cnt.update({c: cnt.get(c, 0) + 1}) %}{% endfor -%}
           {%-   endfor -%}
-          {%-   set allc = allc | unique | list -%}
+          {%-   set common = [] -%}
+          {%-   for c, k in cnt.items() if k * 2 > have | length %}{% set _ = common.append(c) %}{% endfor -%}
           {%-   set lines = [] -%}
           {%-   set absent = ok_hosts | difference(have) -%}
-          {%-   if absent | length > 0 -%}
+          {%-   if have | length == 0 -%}
+          {%-     set _ = lines.append('  нет ни на одном шлюзе') -%}
+          {%-   elif absent | length > 0 -%}
           {%-     set _ = lines.append('  нет алиаса на: ' ~ absent | join(', ')) -%}
           {%-   endif -%}
           {%-   for h in have -%}
-          {%-     set miss = allc | difference(hostvars[h].gw.aliases[n].content) -%}
+          {%-     set content = hostvars[h].gw.aliases[n].content -%}
+          {%-     set miss = common | difference(content) | sort -%}
+          {%-     set extra = content | difference(common) -%}
           {%-     if miss | length > 0 -%}
-          {%-       set _ = lines.append('  ' ~ h ~ ': не хватает ' ~ miss | length ~ ' — ' ~ (miss[:15] | join(', ')) ~ (' …' if miss | length > 15 else '')) -%}
+          {%-       set _ = lines.append('  ' ~ h ~ ': нет ' ~ miss | length ~ ' общих — ' ~ (miss[:10] | join(', ')) ~ (' …' if miss | length > 10 else '') ~ (' (своих: ' ~ extra | length ~ ')' if extra | length > 0 else '')) -%}
           {%-     endif -%}
           {%-   endfor -%}
           {%-   if lines | length > 0 -%}
-          {%-     set _ = out.append(n ~ ' — РАЗЛИЧАЕТСЯ (есть на ' ~ have | length ~ ' из ' ~ ok_hosts | length ~ ', всего записей ' ~ allc | length ~ ')') -%}
+          {%-     set _ = out.append(n ~ ' — РАЗЛИЧАЕТСЯ (есть на ' ~ have | length ~ ' из ' ~ ok_hosts | length ~ ', общих записей ' ~ common | length ~ ')') -%}
           {%-     for l in lines %}{% set _ = out.append(l) %}{% endfor -%}
           {%-   else -%}
-          {%-     set _ = same.append(n) -%}
+          {%-     set _ = same.append(n ~ (' (' ~ common | length ~ ')' if common | length > 0 else ' (общих записей нет — на каждом шлюзе свои)')) -%}
           {%-   endif -%}
           {%- endfor -%}
-          {%- if same | length > 0 %}{% set _ = out.append('Одинаковы на всех шлюзах: ' ~ same | join(', ')) %}{% endif -%}
+          {%- if same | length > 0 %}{% set _ = out.append('Совпадают на всех шлюзах: ' ~ same | join(', ')) %}{% endif -%}
           {%- if ok_hosts | length < 2 %}{% set _ = out.append('Для сверки нужно минимум 2 доступных шлюза') %}{% endif -%}
           {{- out -}}

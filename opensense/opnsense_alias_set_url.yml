@@ -1,0 +1,130 @@
+---
+# Перевод алиаса OPNsense в тип URL (IP-адреса) и установка ссылки на список.
+# Пример: black_list -> https://gitlab.sadkomed.ru/network/fw_configs/-/raw/main/blist
+#
+# - Если алиас типа host/network — меняем тип на url и ставим ссылку (старые записи заменяются ссылкой).
+# - Если алиас уже url с этой же ссылкой — ничего не делаем (changed=0).
+# - Если алиас url с другой ссылкой — меняем ссылку.
+# - Если алиаса нет — создаём его.
+#
+# Модуль oxlorg.opnsense.alias тип менять не умеет (требует удалить алиас, а он используется в правилах),
+# поэтому запись идёт напрямую через API: setItem / addItem + reconfigure.
+#
+# Переменные:
+#   target       — группа/хост из inventory: filial | kzk | store | all             (Survey, обязательно)
+#   alias_name   — имя алиаса, например black_list                                 (Survey, обязательно)
+#   alias_url    — ссылка на список                                                 (Survey, обязательно)
+#   opn_key_<хост>, opn_secret_<хост> — ключи API (Variable Group → Secrets → Extra variables)
+#   opnsense_port — порт веб-интерфейса, по умолчанию 443                         (inventory, необязательно)
+
+- name: OPNsense — алиас типа URL
+  hosts: "{{ target }}"
+  connection: local
+  gather_facts: false
+
+  vars:
+    ansible_python_interpreter: "{{ ansible_playbook_python }}"
+    host_id: "{{ inventory_hostname | replace('-', '_') }}"
+    opn_base: "https://{{ ansible_host }}:{{ opnsense_port | default(443) }}/api/firewall/alias"
+    a_name: "{{ alias_name | default('') | trim }}"
+    a_url: "{{ alias_url | default('') | trim }}"
+
+  module_defaults:
+    ansible.builtin.uri:
+      user: "{{ vars['opn_key_' + host_id] | default('') }}"
+      password: "{{ vars['opn_secret_' + host_id] | default('') }}"
+      force_basic_auth: true
+      validate_certs: false
+      return_content: true
+      body_format: json
+      timeout: 30
+    group/oxlorg.opnsense.all:
+      firewall: "{{ ansible_host }}"
+      api_port: "{{ opnsense_port | default(443) }}"
+      api_key: "{{ vars['opn_key_' + host_id] | default('') }}"
+      api_secret: "{{ vars['opn_secret_' + host_id] | default('') }}"
+      ssl_verify: false
+
+  tasks:
+    - name: Проверка входных данных
+      ansible.builtin.assert:
+        that:
+          - a_name is match('^[A-Za-z0-9_]{1,31}$')
+          - a_url is match('^https?://\S+$')
+        fail_msg: "Не заданы или неверны alias_name / alias_url. Имя: латиница/цифры/_, до 31 символа. Ссылка: http:// или https://"
+        quiet: true
+      run_once: true
+
+    - name: Ключи API для шлюза заданы
+      ansible.builtin.assert:
+        that:
+          - ('opn_key_' + host_id) in vars
+          - ('opn_secret_' + host_id) in vars
+        fail_msg: "Нет ключей opn_key_{{ host_id }} / opn_secret_{{ host_id }} в Variable Group (Secrets → Extra variables)"
+        quiet: true
+
+    - name: Прочитать алиасы
+      oxlorg.opnsense.list:
+        target: alias
+      register: aliases
+
+    - name: Найти алиас
+      ansible.builtin.set_fact:
+        alias_obj: "{{ aliases.data | selectattr('name', 'equalto', a_name) | list | first | default({}) }}"
+
+    - name: Определить, что делать
+      ansible.builtin.set_fact:
+        url_action: >-
+          {{ 'create' if alias_obj | length == 0 else
+             ('none' if alias_obj.type == 'url' and alias_obj.content == [a_url] else 'update') }}
+
+    - name: Получить UUID алиаса
+      ansible.builtin.uri:
+        url: "{{ opn_base }}/getAliasUUID/{{ a_name }}"
+        method: GET
+      register: uuid_resp
+      when: url_action == 'update'
+
+    - name: Изменить тип на url и поставить ссылку
+      ansible.builtin.uri:
+        url: "{{ opn_base }}/setItem/{{ uuid_resp.json.uuid }}"
+        method: POST
+        body:
+          alias:
+            type: url
+            content: "{{ a_url }}"
+      register: set_resp
+      changed_when: true
+      failed_when: set_resp.json.result | default('') != 'saved'
+      when: url_action == 'update'
+
+    - name: Создать алиас
+      ansible.builtin.uri:
+        url: "{{ opn_base }}/addItem"
+        method: POST
+        body:
+          alias:
+            enabled: "1"
+            name: "{{ a_name }}"
+            type: url
+            content: "{{ a_url }}"
+            description: "Создан из Semaphore"
+      register: add_resp
+      changed_when: true
+      failed_when: add_resp.json.result | default('') != 'saved'
+      when: url_action == 'create'
+
+    - name: Применить изменения
+      ansible.builtin.uri:
+        url: "{{ opn_base }}/reconfigure"
+        method: POST
+        body: {}
+      when: url_action != 'none'
+
+    - name: Итог
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }}: {{ a_name }} —
+          {{ {'none': 'уже url с этой ссылкой, без изменений',
+              'create': 'алиаса не было, создан как url',
+              'update': 'было: ' ~ alias_obj.type | default('?') ~ ' (' ~ alias_obj.content | default([]) | length ~ ' записей) → стало: url ' ~ a_url}[url_action] }}

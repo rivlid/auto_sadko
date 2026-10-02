@@ -36,7 +36,6 @@
       force_basic_auth: true
       validate_certs: false
       return_content: true
-      body_format: json
       timeout: 30
     group/oxlorg.opnsense.all:
       firewall: "{{ ansible_host }}"
@@ -78,17 +77,11 @@
           {{ 'create' if alias_obj | length == 0 else
              ('none' if alias_obj.type == 'url' and alias_obj.content == [a_url] else 'update') }}
 
-    - name: Получить UUID алиаса
-      ansible.builtin.uri:
-        url: "{{ opn_base }}/getAliasUUID/{{ a_name }}"
-        method: GET
-      register: uuid_resp
-      when: url_action == 'update'
-
     - name: Изменить тип на url и поставить ссылку
       ansible.builtin.uri:
-        url: "{{ opn_base }}/setItem/{{ uuid_resp.json.uuid }}"
+        url: "{{ opn_base }}/setItem/{{ alias_obj.uuid }}"
         method: POST
+        body_format: json
         body:
           alias:
             type: url
@@ -102,6 +95,7 @@
       ansible.builtin.uri:
         url: "{{ opn_base }}/addItem"
         method: POST
+        body_format: json
         body:
           alias:
             enabled: "1"
@@ -118,6 +112,7 @@
       ansible.builtin.uri:
         url: "{{ opn_base }}/reconfigure"
         method: POST
+        body_format: json
         body: {}
       when: url_action != 'none'
 

@@ -1,0 +1,8 @@
+---
+- hosts: '{{ hosts_group }}'
+  tasks:
+     name: "Set root password"
+     user:
+       name: "{{ user_name }}"
+       password: "{{ user_password }}"
+...

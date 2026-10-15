@@ -1,0 +1,11 @@
+---
+- name: Add user to Proxmox
+  ansible.builtin.command: "pveum user add {{ user_name }}@pam"
+  register: pve_user
+  changed_when: pve_user.rc == 0
+  failed_when: pve_user.rc != 0 and 'already exists' not in pve_user.stderr
+
+- name: Give Administrator role
+  ansible.builtin.command: "pveum acl modify / --users {{ user_name }}@pam --roles Administrator"
+  changed_when: false
+...

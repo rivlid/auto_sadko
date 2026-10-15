@@ -1,0 +1,9 @@
+# permit_root_value yes, no, prohibit-password
+---
+- name: Root login by key only
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: '^#?PermitRootLogin'
+    line: PermitRootLogin {{ permit_root_value }}
+  notify: reload ssh
+...

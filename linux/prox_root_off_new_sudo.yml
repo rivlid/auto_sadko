@@ -1,0 +1,15 @@
+# var
+# user_name
+# user_password
+# permit_root_value yes, no, prohibit-password
+# 
+---
+- hosts: "{{ hosts_group }}"
+  become: true
+  become_method: "su"
+  become_user: "root"
+  roles:
+    - add_user
+    - root_ssh
+    - prox_user_add
+...

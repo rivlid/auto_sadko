@@ -1,4 +1,11 @@
 ---
+- name: Проверить, что ОС поддерживается
+  ansible.builtin.assert:
+    that:
+      - ansible_distribution in ['Debian', 'Ubuntu']
+      - ansible_architecture in ['x86_64', 'aarch64', 'armv7l', 'armv6l']
+    fail_msg: "{{ ansible_distribution }} {{ ansible_distribution_version }} / {{ ansible_architecture }} пока не поддерживается"
+
 - name: Собрать факты об установленных пакетах
   ansible.builtin.package_facts:
     manager: apt
@@ -53,10 +60,32 @@
     state: present
   notify: restart zabbix-agent2
 
+- name: Закомментировать настройки в основном конфиге
+  ansible.builtin.replace:
+    path: /etc/zabbix/zabbix_agent2.conf
+    regexp: '^(\s*(Server|ServerActive|Hostname|HostMetadata)\s*=.*)$'
+    replace: '# \1'
+  notify: restart zabbix-agent2
+
+- name: Найти старые файлы в каталоге, кроме ansible.conf
+  ansible.builtin.find:
+    paths: /etc/zabbix/zabbix_agent2.d
+    patterns: "*.conf"
+    excludes: ansible.conf
+  register: zbx_old
+
+- name: Закомментировать в них настройки
+  ansible.builtin.replace:
+    path: "{{ item.path }}"
+    regexp: '^(\s*(Server|ServerActive|Hostname|HostMetadata)\s*=.*)$'
+    replace: '# \1'
+  loop: "{{ zbx_old.files }}"
+  notify: restart zabbix-agent2
+
 - name: Разложить конфиг хоста
   ansible.builtin.template:
     src: agent.conf.j2
-    dest: "/etc/zabbix/zabbix_agent2.d/{{ zbx_hostname }}.conf"
+    dest: "/etc/zabbix/zabbix_agent2.d/ansible.conf"
     owner: root
     group: root
     mode: "0644"

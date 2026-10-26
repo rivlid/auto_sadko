@@ -1,11 +1,19 @@
 ---
 zbx_major: "7.0"
-zbx_release_url: "https://repo.zabbix.com/zabbix/{{ zbx_major }}/debian/pool/main/z/zabbix-release/zabbix-release_latest_{{ zbx_major }}+debian{{ ansible_distribution_major_version }}_all.deb"
+# debian / ubuntu
+zbx_os: "{{ ansible_distribution | lower }}"
+# 12 для Debian, 22.04 для Ubuntu
+zbx_os_ver: "{{ ansible_distribution_version if zbx_os == 'ubuntu' else ansible_distribution_major_version }}"
+# каталог в репозитории зависит от архитектуры
+zbx_repo_dir: >-
+  {{ 'raspbian' if ansible_architecture in ['armv7l', 'armv6l']
+     else zbx_os ~ ('-arm64' if ansible_architecture == 'aarch64' else '') }}
+zbx_release_url: "https://repo.zabbix.com/zabbix/{{ zbx_major }}/{{ zbx_repo_dir }}/pool/main/z/zabbix-release/zabbix-release_latest_{{ zbx_major }}+{{ zbx_os }}{{ zbx_os_ver }}_all.deb"
 
 zbx_server: "192.168.253.41"
 zbx_server_active: "{{ zbx_server }}"
-zbx_hostname: "{{ inventory_hostname }}"
-zbx_host_metadata: "hypervison"
+zbx_hostname: "{{ ansible_hostname }}"
+zbx_host_metadata: "linux"
 
 # снимать ли репозиторий Zabbix после установки
 zbx_remove_repo: true

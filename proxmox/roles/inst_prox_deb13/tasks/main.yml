@@ -5,7 +5,7 @@
 
 - name: "Add an /etc/hosts entry for your IP address"
   ansible.builtin.template:
-    src: "./template/hosts"
+    src: "hosts"
     dest: "/etc/hosts"
     backup: "yes"
     
@@ -33,7 +33,7 @@
 - name: "/etc/network/interfaces edit"
   ansible.builtin.template:
     backup: "yes"
-    src: "./template/interfaces"
+    src: "interfaces"
     dest: "/etc/network/interfaces"
     owner: root
     group: root

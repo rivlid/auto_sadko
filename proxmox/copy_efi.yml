@@ -1,0 +1,113 @@
+---
+- name: Дублирование EFI-раздела на второй диск (md raid)
+  hosts: debian_servers
+  become: true
+
+  vars:
+    esp_mount: /boot/efi
+    esp_type_guid: c12a7328-f81f-11d2-ba4b-00a0c93ec93b
+    esp2_label: "debian 2"
+    esp2_loader: '\EFI\debian\shimx64.efi'
+    esp2_tmp_mount: /mnt/efi2
+    install_sync_hook: true   # false, если хук после обновлений не нужен
+
+  tasks:
+    - name: Установить dosfstools, efibootmgr и rsync
+      ansible.builtin.apt:
+        name: [dosfstools, efibootmgr, rsync]
+        state: present
+        update_cache: true
+
+    # ---------- Определение дисков ----------
+    - name: Определить устройство первого ESP
+      ansible.builtin.command: findmnt -no SOURCE {{ esp_mount }}
+      register: esp1_dev
+      changed_when: false
+
+    - name: Получить volume ID первого ESP (вида XXXX-XXXX)
+      ansible.builtin.command: blkid -s UUID -o value {{ esp1_dev.stdout }}
+      register: esp1_uuid
+      changed_when: false
+
+    - name: Получить список разделов
+      ansible.builtin.command: lsblk -J -l -p -o PATH,PKNAME,PARTN,PARTTYPE
+      register: lsblk_out
+      changed_when: false
+
+    - name: Найти второй ESP (все ESP, кроме смонтированного в {{ esp_mount }})
+      ansible.builtin.set_fact:
+        esp2: "{{ (lsblk_out.stdout | from_json).blockdevices
+                  | selectattr('parttype', 'defined')
+                  | selectattr('parttype', 'equalto', esp_type_guid)
+                  | rejectattr('path', 'equalto', esp1_dev.stdout)
+                  | list }}"
+
+    - name: Убедиться, что найден ровно один второй ESP
+      ansible.builtin.assert:
+        that: esp2 | length == 1
+        fail_msg: "Найдено ESP-разделов кроме основного: {{ esp2 | length }}"
+
+    - name: Задать параметры второго ESP
+      ansible.builtin.set_fact:
+        esp2_part: "{{ esp2[0].path }}"
+        esp2_disk: "{{ esp2[0].pkname }}"
+        esp2_partnum: "{{ esp2[0].partn }}"
+
+    # ---------- Форматирование и копирование ----------
+    - name: Отформатировать второй ESP с тем же volume ID
+      community.general.filesystem:
+        fstype: vfat
+        dev: "{{ esp2_part }}"
+        opts: "-i {{ esp1_uuid.stdout | replace('-', '') }}"
+        # force не ставим: если ФС уже есть, раздел не трогается
+
+    - name: Смонтировать второй ESP (без записи в fstab)
+      ansible.posix.mount:
+        path: "{{ esp2_tmp_mount }}"
+        src: "{{ esp2_part }}"
+        fstype: vfat
+        state: ephemeral
+
+    - name: Скопировать EFI на второй диск
+      ansible.builtin.command: >
+        rsync -a --delete {{ esp_mount }}/EFI/ {{ esp2_tmp_mount }}/EFI/
+      changed_when: true
+
+    - name: Размонтировать второй ESP
+      ansible.posix.mount:
+        path: "{{ esp2_tmp_mount }}"
+        state: unmounted
+
+    # ---------- Загрузочная запись ----------
+    - name: Получить текущие записи efibootmgr
+      ansible.builtin.command: efibootmgr -v
+      register: efi_entries
+      changed_when: false
+
+    - name: Создать загрузочную запись для второго диска
+      ansible.builtin.command: >
+        efibootmgr -c -d {{ esp2_disk }} -p {{ esp2_partnum }}
+        -L "{{ esp2_label }}" -l '{{ esp2_loader }}'
+      when: esp2_label not in efi_entries.stdout
+
+    # ---------- Автосинхронизация после обновлений ----------
+    - name: Установить скрипт синхронизации ESP
+      ansible.builtin.copy:
+        dest: /usr/local/sbin/sync-esp.sh
+        mode: "0755"
+        content: |
+          #!/bin/sh
+          set -e
+          mnt=$(mktemp -d)
+          mount {{ esp2_part }} "$mnt"
+          trap 'umount "$mnt"; rmdir "$mnt"' EXIT
+          rsync -a --delete {{ esp_mount }}/EFI/ "$mnt"/EFI/
+      when: install_sync_hook
+
+    - name: Установить apt-хук, запускающий синхронизацию после dpkg
+      ansible.builtin.copy:
+        dest: /etc/apt/apt.conf.d/99-sync-esp
+        mode: "0644"
+        content: |
+          DPkg::Post-Invoke { "/usr/local/sbin/sync-esp.sh || true"; };
+      when: install_sync_hook

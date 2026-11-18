@@ -1,0 +1,129 @@
+---
+# Добавление / удаление доменов в Unbound DNS → Blocklists на ВСЕХ шлюзах группы.
+# Коллекция: oxlorg.opnsense (модуль unbound_dnsbl). Запросы идут с Semaphore (connection: local).
+# Нужен OPNsense >= 25.7.8 и релиз коллекции, совместимый с версией OPNsense.
+#
+# Переменные:
+#   target              — группа шлюзов: filial | kzk | store | all (все)        (Survey, обязательно)
+#   dnsbl_field         — какое поле менять: allow | block | wildcard            (Survey, обязательно)
+#                           allow    — Allowlist Domains
+#                           block    — Blocklist Domains (точное совпадение)
+#                           wildcard — Wildcard Domains (домен + все поддомены)
+#   dnsbl_name          — имя записи (поле «Описание»), по умолчанию default     (Survey, необязательно)
+#   entries             — домены через запятую, пробел или перевод строки        (Survey)
+#   alias_action        — add | remove, по умолчанию add                         (Survey)
+#   opn_key_<хост>      — ключ API шлюза   (Variable Group → Secrets → Extra variables)
+#   opn_secret_<хост>   — секрет API шлюза (Variable Group → Secrets → Extra variables)
+#   opnsense_port       — порт веб-интерфейса, по умолчанию 443                  (inventory, необязательно)
+#   show_content        — true: напечатать полный список поля, по умолчанию false (Survey, необязательно)
+#   dump_entry          — true: напечатать всю запись как её отдаёт API (для отладки) (Survey, необязательно)
+
+- name: OPNsense — Unbound Blocklists (allow / block / wildcard) на всех шлюзах группы
+  hosts: "{{ target }}"
+  connection: local
+  gather_facts: false
+
+  vars:
+    ansible_python_interpreter: "{{ ansible_playbook_python }}"
+    host_id: "{{ inventory_hostname | replace('-', '_') }}"
+    opn_action: "{{ alias_action | default('add') }}"
+    bl_name: "{{ dnsbl_name | default('default') }}"
+    field_map:
+      allow: domains_allow
+      block: domains_block
+      wildcard: wildcard_domains_block
+    field_key: "{{ field_map[dnsbl_field | default('')] | default('') }}"
+    # разделители: запятая, пробел, точка с запятой, перевод строки
+    raw_items: "{{ (entries | default('') | string) | regex_replace('[,;\\s]+', ' ') | trim | split(' ') | reject('equalto', '') | unique | list }}"
+    # block/wildcard — нижний регистр; allow допускает regex, поэтому регистр не трогаем
+    items: "{{ raw_items if dnsbl_field | default('') == 'allow' else (raw_items | map('lower') | unique | list) }}"
+    fqdn_regex: '^(?=.{1,253}$)([a-z0-9_]([a-z0-9_-]{0,61}[a-z0-9_])?\.)+[a-z]{2,63}$'
+    items_bad: >-
+      {{ [] if dnsbl_field | default('') == 'allow'
+         else (items | reject('match', fqdn_regex) | list) }}
+
+  module_defaults:
+    group/oxlorg.opnsense.all:
+      firewall: "{{ ansible_host }}"
+      api_port: "{{ opnsense_port | default(443) }}"
+      api_key: "{{ vars['opn_key_' + host_id] }}"
+      api_secret: "{{ vars['opn_secret_' + host_id] }}"
+      ssl_verify: false
+
+  tasks:
+    - name: Проверка входных данных
+      ansible.builtin.assert:
+        that:
+          - dnsbl_field is defined and dnsbl_field in ['allow', 'block', 'wildcard']
+          - items | length > 0
+          - items_bad | length == 0
+          - opn_action in ['add', 'remove']
+        fail_msg: >-
+          Неверный ввод. dnsbl_field: allow|block|wildcard, действие: add/remove.
+          Нераспознано как домен: {{ items_bad | join(', ') | default('-', true) }}.
+          Допустимо: site.ru (для wildcard — домен 2-го уровня и ниже, TLD вроде com нельзя).
+        quiet: true
+      run_once: true
+
+    - name: Прочитать записи Blocklists
+      oxlorg.opnsense.list:
+        target: unbound_dnsbl
+      register: dnsbl_list
+
+    - name: Найти нужную запись
+      ansible.builtin.set_fact:
+        bl_obj: "{{ dnsbl_list.data | selectattr('name', 'equalto', bl_name) | list | first | default({}) }}"
+
+    - name: Запись должна существовать
+      ansible.builtin.assert:
+        that:
+          - bl_obj | length > 0
+        fail_msg: "На {{ inventory_hostname }} в Unbound → Blocklists нет записи '{{ bl_name }}'"
+        quiet: true
+
+    - name: Показать запись как её отдаёт API (отладка)
+      ansible.builtin.debug:
+        var: bl_obj
+      when: dump_entry | default(false) | bool
+
+    - name: Вычислить новое содержимое поля
+      ansible.builtin.set_fact:
+        cur_list: "{{ bl_obj[field_key] | default([]) }}"
+    - ansible.builtin.set_fact:
+        new_content: >-
+          {{ (cur_list + (items | difference(cur_list)))
+             if opn_action == 'add'
+             else (cur_list | difference(items)) }}
+
+    # Модуль заменяет запись целиком — остальные поля передаём текущие,
+    # иначе они сбросятся к значениям по умолчанию.
+    - name: Записать запись Blocklists и применить
+      oxlorg.opnsense.unbound_dnsbl:
+        name: "{{ bl_name }}"
+        providers: "{{ bl_obj.providers | default(omit) }}"
+        download_urls: "{{ bl_obj.download_urls | default(omit) }}"
+        source_networks: "{{ bl_obj.source_networks | default(omit) }}"
+        cache_ttl: "{{ bl_obj.cache_ttl | default(omit) }}"
+        nxdomain_address: "{{ bl_obj.nxdomain_address | default(omit) }}"
+        nxdomain: "{{ bl_obj.nxdomain | default(omit) }}"
+        enabled: "{{ bl_obj.enabled | default(true) | bool }}"
+        domains_allow: "{{ new_content if field_key == 'domains_allow' else (bl_obj.domains_allow | default([])) }}"
+        domains_block: "{{ new_content if field_key == 'domains_block' else (bl_obj.domains_block | default([])) }}"
+        wildcard_domains_block: "{{ new_content if field_key == 'wildcard_domains_block' else (bl_obj.wildcard_domains_block | default([])) }}"
+        reload: true
+      register: result
+
+    - name: Итог
+      ansible.builtin.debug:
+        msg:
+          - "{{ inventory_hostname }}: запись '{{ bl_name }}', поле {{ dnsbl_field }}"
+          - "Запрошено: {{ opn_action }} {{ items | join(', ') }}"
+          - "Добавлено: {{ new_content | difference(cur_list) | join(', ') | default('—', true) }}"
+          - "Удалено: {{ cur_list | difference(new_content) | join(', ') | default('—', true) }}"
+          - "{{ 'Изменено' if result is changed else 'Без изменений (уже было так)' }}"
+          - "Записей в поле: было {{ cur_list | length }}, стало {{ new_content | length }}"
+
+    - name: Полное содержимое поля
+      ansible.builtin.debug:
+        msg: "{{ new_content }}"
+      when: show_content | default(false) | bool
